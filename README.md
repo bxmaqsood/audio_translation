@@ -77,9 +77,19 @@ Only once that looks right, run the full pass:
 ```bash
 python scripts/02_transliterate_ur_to_hi.py --in transcript_ur.json --out transcript_hi.json --all
 ```
-This caches results in `transliteration_cache.json` (safe to re-run/resume) and warns if any
-segments fell back to the weaker offline converter (the online API is preferred but occasionally
-unreachable/rate-limited).
+This caches results in `transliteration_cache.json` (safe to re-run/resume).
+
+**Known issue:** the online API (`sangam.learnpunjabi.org`, an old academic service) is
+currently returning HTTP 500 errors — it's disabled by default. The offline converter is used
+instead; it occasionally produces stray non-Devanagari symbols or rare/unusual characters, which
+the script strips or flags automatically. Any flagged segments are written to
+`flagged_segments.json` for manual review before training — check that file and hand-fix or drop
+those segments rather than feeding them into fine-tuning as-is.
+
+Install its one missing dependency first if you haven't:
+```bash
+pip install indic-nlp-library
+```
 
 ### 3. Build the fine-tuning dataset
 _Pending._
