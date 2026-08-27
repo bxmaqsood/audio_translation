@@ -1,16 +1,22 @@
 """
-Stage 1: Transcribe raw Urdu audio with Whisper, producing segment-level
-timestamps + Urdu text. This is the input to the transliteration stage.
+Stage 1: Transcribe raw Urdu audio with Whisper, producing WORD-level
+timestamps -- this is what stage 4 uses to find real sentence breaks (see
+its docstring): segment-level timestamps turned out to be nearly useless for
+this (90% of segment-to-segment gaps are exactly zero -- Whisper snaps
+segment boundaries together regardless of whether the speaker paused there),
+so we need per-word timing to see the actual pauses.
 
 Usage:
     python 01_transcribe_urdu.py --audio /mnt/extra/bxm0694/speaker.wav \
         --out transcript_ur.json --model large-v3
 
 Output JSON shape:
-    [
-      {"id": 0, "start": 0.0, "end": 4.32, "text": "..."},
-      ...
-    ]
+    {
+      "segments": [{"id": 0, "start": 0.0, "end": 4.32, "text": "..."}, ...],
+      "words": [{"word": "...", "start": 0.0, "end": 0.34}, ...]
+    }
+"segments" is kept only for reference/debugging (e.g. spot-checking
+transcription quality); "words" is what stage 4 actually uses.
 """
 import argparse
 import json
@@ -18,13 +24,13 @@ import json
 import whisper
 
 
-def transcribe(audio_path: str, model_name: str) -> list[dict]:
+def transcribe(audio_path: str, model_name: str) -> dict:
     model = whisper.load_model(model_name)
     result = model.transcribe(
         audio_path,
         language="ur",
         task="transcribe",
-        word_timestamps=False,
+        word_timestamps=True,
         verbose=False,
     )
     segments = [
@@ -36,7 +42,12 @@ def transcribe(audio_path: str, model_name: str) -> list[dict]:
         }
         for seg in result["segments"]
     ]
-    return segments
+    words = [
+        {"word": w["word"].strip(), "start": round(w["start"], 3), "end": round(w["end"], 3)}
+        for seg in result["segments"]
+        for w in seg["words"]
+    ]
+    return {"segments": segments, "words": words}
 
 
 def main():
@@ -50,14 +61,14 @@ def main():
     )
     args = parser.parse_args()
 
-    segments = transcribe(args.audio, args.model)
+    result = transcribe(args.audio, args.model)
 
     with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(segments, f, ensure_ascii=False, indent=2)
+        json.dump(result, f, ensure_ascii=False, indent=2)
 
-    print(f"Wrote {len(segments)} segments to {args.out}")
+    print(f"Wrote {len(result['segments'])} segments / {len(result['words'])} words to {args.out}")
     print("Spot-check a few segments below before moving to transliteration:")
-    for seg in segments[:5]:
+    for seg in result["segments"][:5]:
         print(f"  [{seg['start']:>7.2f}-{seg['end']:>7.2f}] {seg['text']}")
 
 

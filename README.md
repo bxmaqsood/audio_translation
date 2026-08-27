@@ -33,7 +33,8 @@ repo for reference but are no longer part of the active pipeline.
 
 ## Pipeline (current)
 
-**1. Transcribe the Urdu audio** (for picking a good reference clip, and as a sanity check):
+**1. Transcribe the Urdu audio** (with word-level timestamps — stage 4 needs per-word timing to
+find real sentence breaks; see below for why):
 ```bash
 python scripts/01_transcribe_urdu.py \
     --audio /mnt/extra/bxm0694/40_minutes_training_audio.m4a \
@@ -41,22 +42,29 @@ python scripts/01_transcribe_urdu.py \
     --model large-v3
 ```
 
-**2. Merge Whisper's segments into sentence-like units, then translate with IndicTrans2.**
-Three approaches were tried here, in order:
+**2. Group words into sentences by actual speaker pauses, then translate with IndicTrans2.**
+Several approaches were tried here, in order, each fixing a real problem with the last:
 1. Whisper's per-clip translate mode — prone to misdetecting the language on short clips.
-2. IndicTrans2 translating each raw Whisper segment in isolation — better, but still broken on
-   fragments, since Whisper splits on *pauses* in speech, not grammatical sentence boundaries
-   (many segments are incomplete clauses, e.g. "کے زمن میں" = "in the time of").
-3. **Batching segments through the Claude API with cross-segment context** — fixed quality
-   without merging, but costs API credits per run; abandoned in favor of the free option below
-   once we confirmed simple merging alone fixes most of the same problem.
+2. IndicTrans2 translating each raw Whisper *segment* in isolation — better, but Whisper splits
+   audio on *pauses*, not grammatical sentence boundaries, so many segments are incomplete
+   clauses (e.g. "کے زمن میں" = "in the time of") that translate badly alone.
+3. Batching segments through the Claude API with cross-segment context — fixed quality without
+   merging, but costs API credits per run.
+4. Merging segments using punctuation + a word/duration cap — free and simpler, big quality win,
+   but still an approximation of real sentence boundaries.
+5. **Current approach: merge using ONLY actual pause timing, at the word level.** We measured
+   the real gap distribution between consecutive Whisper *segments* first — 90% were exactly
+   zero, meaning segment boundaries don't reflect real pauses at all. Word-level timestamps do:
+   in our data, 92% of word-to-word gaps were ~zero (continuous speech), with a sharp, clean
+   boundary at 0.2s (zero gaps fell between 0.15s and 0.2s at all) separating "still talking"
+   from "the speaker paused." `GAP_THRESHOLD_SEC = 0.2` in the script encodes this — **re-check
+   the gap distribution (see the script's docstring) before assuming 0.2s holds for a
+   differently-paced speaker/recording.** No other signal (punctuation, word count, duration) is
+   used, by design — pure pause timing is both the truest signal for sentence meaning and what
+   naturally lines up with audio-sync anchoring.
 
-**Current approach:** merge consecutive raw segments into more complete units first — using
-Urdu sentence-ending punctuation when present, an unusually long pause before the next segment,
-or a word/duration cap as a fallback — then translate each *merged* unit with IndicTrans2. Each
-merged unit keeps its first sub-segment's original start time as its anchor, so stage 5's
-timestamp-based audio-sync is unaffected; we're just anchoring at whole-sentence boundaries
-instead of mid-sentence ones.
+Each resulting sentence's start time is its first word's real start time, so stage 5's
+timestamp-based audio-sync anchors to where the speaker actually began that sentence.
 ```bash
 pip install IndicTransToolkit
 python scripts/04_translate_ur_to_en.py \
@@ -66,9 +74,8 @@ python scripts/04_translate_ur_to_en.py \
 Requires the same gated-model HF login as before (`huggingface-cli login`, after accepting the
 model's terms at https://huggingface.co/ai4bharat/indictrans2-indic-en-1B). This writes a plain,
 editable JSON file **before** any audio is generated, on purpose — review it and hand-fix any
-translations that read oddly (edit the `"text"` field for that unit, save, and go straight to
-stage 5 — no need to re-run translation). Each entry also carries `"source_ids"` (the original
-Whisper segment ids it was merged from) for traceability back to `transcript_ur.json`.
+translations that read oddly (edit the `"text"` field for that segment, save, and go straight to
+stage 5 — no need to re-run translation).
 
 **3. Pick a good reference clip.** You want a short (3-6s), clean, single-sentence clip with an
 accurate transcript. We used `awk` on `dataset/metadata_debug.csv` (from the earlier Chatterbox
