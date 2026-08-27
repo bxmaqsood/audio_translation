@@ -41,19 +41,18 @@ python scripts/01_transcribe_urdu.py \
     --model large-v3
 ```
 
-**2. Translate each Urdu segment to English individually**, so English segments map 1:1 to the
-original Urdu timestamps (needed for the timing rules below):
+**2. Translate each Urdu segment's text to English**, using IndicTrans2 (a dedicated Urdu→English
+MT model, not Whisper's general translate mode — we switched after finding Whisper's per-clip
+audio translation both lower quality and prone to misdetecting the language on short clips):
 ```bash
+pip install IndicTransToolkit
 python scripts/04_translate_ur_to_en.py \
-    --audio /mnt/extra/bxm0694/40_minutes_training_audio.m4a \
     --transcript transcript_ur.json \
-    --out transcript_en.json \
-    --model large-v3
+    --out transcript_en.json
 ```
-This writes a plain, editable JSON file **before** any audio is generated on purpose — review
-it and hand-fix any translations that read oddly before moving on (translating segment-by-segment
-loses a little cross-sentence context vs. translating the whole passage at once, so occasional
-literal/awkward phrasing is more likely here — worth a skim).
+This writes a plain, editable JSON file **before** any audio is generated, on purpose — review
+it and hand-fix any translations that read oddly (edit the `"text"` field for that segment,
+save, and go straight to stage 5 — no need to re-run translation).
 
 **3. Pick a good reference clip.** You want a short (3-6s), clean, single-sentence clip with an
 accurate transcript. We used `awk` on `dataset/metadata_debug.csv` (from the earlier Chatterbox
