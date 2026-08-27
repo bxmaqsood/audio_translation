@@ -55,12 +55,12 @@ MODEL_NAME = "ai4bharat/indictrans2-indic-en-1B"
 SRC_LANG = "urd_Arab"
 TGT_LANG = "eng_Latn"
 
-GAP_THRESHOLD_SEC = 0.2  # see module docstring for how this was derived
+DEFAULT_GAP_THRESHOLD_SEC = 0.2  # see module docstring for how this was derived
 
 
-def group_words_by_pause(words: list[dict]) -> list[dict]:
+def group_words_by_pause(words: list[dict], gap_threshold_sec: float) -> list[dict]:
     """Split the word list into sentences wherever the pause before the next
-    word is >= GAP_THRESHOLD_SEC. No other signal (punctuation, word count,
+    word is >= gap_threshold_sec. No other signal (punctuation, word count,
     duration) is used."""
     groups = []
     current = []
@@ -68,7 +68,7 @@ def group_words_by_pause(words: list[dict]) -> list[dict]:
     for i, w in enumerate(words):
         current.append(w)
         gap_to_next = words[i + 1]["start"] - w["end"] if i + 1 < len(words) else None
-        paused = gap_to_next is not None and gap_to_next >= GAP_THRESHOLD_SEC
+        paused = gap_to_next is not None and gap_to_next >= gap_threshold_sec
         is_last = i + 1 == len(words)
 
         if paused or is_last:
@@ -83,14 +83,26 @@ def main():
     parser.add_argument("--transcript", default="transcript_ur.json", help="Output of stage 1")
     parser.add_argument("--out", default="transcript_en.json")
     parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument(
+        "--gap-threshold",
+        type=float,
+        default=DEFAULT_GAP_THRESHOLD_SEC,
+        help="Minimum pause (seconds) between words to count as a sentence break",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only print the grouped Urdu sentences (no translation) -- use this to tune "
+        "--gap-threshold quickly before committing to a full translation run",
+    )
     args = parser.parse_args()
 
     with open(args.transcript, "r", encoding="utf-8") as f:
         data = json.load(f)
     words = data["words"]
 
-    groups = group_words_by_pause(words)
-    print(f"Grouped {len(words)} words into {len(groups)} pause-delimited sentences")
+    groups = group_words_by_pause(words, args.gap_threshold)
+    print(f"Grouped {len(words)} words into {len(groups)} pause-delimited sentences (threshold={args.gap_threshold}s)")
 
     sentences = [
         {
@@ -101,6 +113,12 @@ def main():
         }
         for i, group in enumerate(groups)
     ]
+
+    if args.dry_run:
+        print("\n--dry-run: printing grouped sentences without translating\n")
+        for s in sentences[:15]:
+            print(f"  [{s['start']:>7.2f}-{s['end']:>7.2f}] {s['text_ur']}")
+        return
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Loading {MODEL_NAME} on {device} (this can take a minute)...")
