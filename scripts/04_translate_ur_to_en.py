@@ -63,7 +63,7 @@ def main():
         clip_path = "_translate_tmp_clip.wav"
         clip.export(clip_path, format="wav")
 
-        result = model.transcribe(clip_path, task="translate", verbose=False)
+        result = model.transcribe(clip_path, task="translate", language="ur", verbose=False)
         english_text = result["text"].strip()
 
         en_segments.append(
