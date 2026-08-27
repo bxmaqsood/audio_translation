@@ -41,27 +41,34 @@ python scripts/01_transcribe_urdu.py \
     --model large-v3
 ```
 
-**2. Translate each Urdu segment's text to English**, using the Claude API with full surrounding
-context. Two earlier approaches were tried and abandoned: Whisper's per-clip translate mode
-(prone to misdetecting the language on short clips) and IndicTrans2 (a dedicated MT model, but
-translating each segment in total isolation). Both suffer from the same root problem: Whisper's
-segments are split on *pauses*, not grammatical sentence boundaries, so many segments are
-incomplete clauses — translated alone, they come out broken or misleading regardless of how good
-the translator is. The Claude-based approach batches several consecutive segments per call (with
-a little trailing context from the previous batch) and asks for one translation per segment id,
-worded so that concatenated in order they read as a fluent passage — fixing translation quality
-**without** merging segments or losing the per-segment timestamps stage 5 needs for audio-sync
-anchoring.
+**2. Merge Whisper's segments into sentence-like units, then translate with IndicTrans2.**
+Three approaches were tried here, in order:
+1. Whisper's per-clip translate mode — prone to misdetecting the language on short clips.
+2. IndicTrans2 translating each raw Whisper segment in isolation — better, but still broken on
+   fragments, since Whisper splits on *pauses* in speech, not grammatical sentence boundaries
+   (many segments are incomplete clauses, e.g. "کے زمن میں" = "in the time of").
+3. **Batching segments through the Claude API with cross-segment context** — fixed quality
+   without merging, but costs API credits per run; abandoned in favor of the free option below
+   once we confirmed simple merging alone fixes most of the same problem.
+
+**Current approach:** merge consecutive raw segments into more complete units first — using
+Urdu sentence-ending punctuation when present, an unusually long pause before the next segment,
+or a word/duration cap as a fallback — then translate each *merged* unit with IndicTrans2. Each
+merged unit keeps its first sub-segment's original start time as its anchor, so stage 5's
+timestamp-based audio-sync is unaffected; we're just anchoring at whole-sentence boundaries
+instead of mid-sentence ones.
 ```bash
-pip install anthropic
-export ANTHROPIC_API_KEY=<your key>   # or `ant auth login` if using a CLI-managed profile
+pip install IndicTransToolkit
 python scripts/04_translate_ur_to_en.py \
     --transcript transcript_ur.json \
     --out transcript_en.json
 ```
-This writes a plain, editable JSON file **before** any audio is generated, on purpose — review
-it and hand-fix any translations that read oddly (edit the `"text"` field for that segment,
-save, and go straight to stage 5 — no need to re-run translation).
+Requires the same gated-model HF login as before (`huggingface-cli login`, after accepting the
+model's terms at https://huggingface.co/ai4bharat/indictrans2-indic-en-1B). This writes a plain,
+editable JSON file **before** any audio is generated, on purpose — review it and hand-fix any
+translations that read oddly (edit the `"text"` field for that unit, save, and go straight to
+stage 5 — no need to re-run translation). Each entry also carries `"source_ids"` (the original
+Whisper segment ids it was merged from) for traceability back to `transcript_ur.json`.
 
 **3. Pick a good reference clip.** You want a short (3-6s), clean, single-sentence clip with an
 accurate transcript. We used `awk` on `dataset/metadata_debug.csv` (from the earlier Chatterbox
