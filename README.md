@@ -98,11 +98,27 @@ LJSpeech-style `metadata.csv` using the Devanagari text:
 python scripts/03_prepare_dataset.py \
     --audio /mnt/extra/bxm0694/40_minutes_training_audio.m4a \
     --transcript transcript_hi.json \
-    --out-dir dataset
+    --out-dir dataset \
+    --prefix rec1
 ```
 Prints how many clips were kept vs. skipped (too short/too long) and the total kept duration.
 Check `dataset/metadata_debug.csv` afterwards — it has the Urdu + Devanagari text side by side
 with timing, useful for spot-checking a few clips by ear against their text.
+
+**Adding more recordings of the same speaker to grow the dataset:** run stages 1-3 again for
+each new audio file, using a different `--prefix` (so filenames don't collide) and `--append`
+on stage 3 (so you don't overwrite the existing metadata):
+```bash
+python scripts/01_transcribe_urdu.py --audio /path/to/recording2.wav --out transcript_ur_2.json
+python scripts/02_transliterate_ur_to_hi.py --in transcript_ur_2.json --sample 8   # sanity check first
+python scripts/02_transliterate_ur_to_hi.py --in transcript_ur_2.json --out transcript_hi_2.json --all
+python scripts/03_prepare_dataset.py \
+    --audio /path/to/recording2.wav \
+    --transcript transcript_hi_2.json \
+    --out-dir dataset \
+    --prefix rec2 \
+    --append
+```
 
 ### 4. Fine-tune Chatterbox
 _Pending._
