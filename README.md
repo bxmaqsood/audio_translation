@@ -56,7 +56,15 @@ Detailed commands for each stage are added below as the corresponding script lan
 repo. Run them in order from the server, in the `dub` conda environment.
 
 ### 1. Transcribe (Urdu)
-_Coming next commit — `scripts/01_transcribe_urdu.py`._
+```bash
+python scripts/01_transcribe_urdu.py \
+    --audio /mnt/extra/bxm0694/speaker.wav \
+    --out transcript_ur.json \
+    --model large-v3
+```
+Prints the first few segments so you can eyeball transcription quality immediately. Re-run
+with `--model medium` if `large-v3` is too slow for a quick test, but use `large-v3` for the
+real run — Urdu accuracy matters a lot here since every downstream stage depends on it.
 
 ### 2. Transliterate Urdu → Devanagari
 _Pending._
