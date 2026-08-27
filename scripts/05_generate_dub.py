@@ -45,7 +45,10 @@ def main():
     parser.add_argument("--ref-text", required=True, help="Accurate transcript of the reference clip")
     parser.add_argument("--out", default="final_dub.wav")
     parser.add_argument(
-        "--model-id", default="bharatgenai/sooktam2", help="HF model id (or local path if already downloaded)"
+        "--model-id",
+        default="/mnt/extra/bxm0694/sooktam2",
+        help="Local path to the downloaded Sooktam-2 repo (or a HF hub id, but the local path "
+        "avoids re-downloading and works regardless of your current directory)",
     )
     args = parser.parse_args()
 

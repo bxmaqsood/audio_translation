@@ -110,10 +110,24 @@ wget -O sooktam.safetensors "https://huggingface.co/bharatgenai/sooktam2/resolve
 # 5. PyTorch 2.6 changed torch.load's default weights_only=True, which breaks loading this
 #    (trusted, official) checkpoint. Patch the vendored loader:
 sed -i 's/weights_only=True/weights_only=False/g' src/f5_tts/infer/utils_infer.py
+
+# 6. ffmpeg (needed by pydub) isn't installed in this env either:
+CONDA_NO_PLUGINS=true conda install -c conda-forge ffmpeg -y --solver classic
 ```
 
-After that, `scripts/05_generate_dub.py` (run from this repo, in the `sooktam` env) works as
-documented above.
+**Move it somewhere permanent** (its checkpoints are multi-GB and painful to re-download/re-patch
+if lost — don't leave it in a temp/scratch location):
+```bash
+mv sooktam2 /mnt/extra/bxm0694/sooktam2
+cd /mnt/extra/bxm0694/sooktam2 && pip install -e . --no-cache-dir   # editable installs point at
+                                                                     # a fixed path -- re-run this
+                                                                     # any time you move the folder
+```
+
+After that, `scripts/05_generate_dub.py` (run from anywhere, in the `sooktam` env) loads the
+model from `/mnt/extra/bxm0694/sooktam2` (its default `--model-id`) — passing the local folder
+path rather than the `bharatgenai/sooktam2` hub id avoids both re-downloading and a cwd-dependency
+bug in the model's custom loading code (see git history on this file for the investigation).
 
 ### Notes on `model.infer()` parameters
 - `cls_language`: `"urdu"` or `"english"` (also hindi, marathi, etc. — see the model card for
