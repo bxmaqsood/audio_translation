@@ -1,25 +1,34 @@
 """
-Stage 5: Generate the final English dub in the cloned voice, using Sooktam-2's
-zero-shot voice cloning (no fine-tuning required — this replaced the earlier
-Chatterbox fine-tuning approach after Sooktam-2's native Urdu pretraining
-proved good enough for zero-shot cloning; see README for why).
+Stage 5: Generate the final English dub in the cloned voice, with each
+sentence's audio anchored to start at the same timestamp its corresponding
+Urdu sentence started at in the original recording.
 
-Run this in the `sooktam` conda environment, from anywhere (the model is
-loaded via `transformers.AutoModel` + `trust_remote_code`, no need to be
-inside the sooktam2 repo directory).
+Timing rules (do not change without re-reading this comment -- these were
+specified deliberately, not arbitrary defaults):
+  - Audio is NEVER sped up or slowed down to fit a time slot. Every segment
+    plays at its natural generated pace, full length.
+  - Each segment's audio starts at max(its original Urdu start time, the
+    point where the previous segment's audio actually finished). i.e. we
+    anchor to the original timestamp whenever possible, but never rewind.
+  - If English finishes before the original Urdu segment would have ended,
+    the gap up to the next segment's anchor point is left as silence.
+  - If English runs long enough to overlap the next segment's anchor point,
+    the next segment simply starts right after the current one finishes
+    (its own anchor is skipped for that one segment) -- so the total output
+    can end up longer than the original recording, but is never shorter and
+    never has anything played faster/slower than it was actually generated.
+
+Run this in the `sooktam` conda environment.
 
 Usage:
     python 05_generate_dub.py \
         --english transcript_en.json \
-        --ref-file /home/bxm0694/audio_translation/dataset/wavs/rec1_seg_0007.wav \
-        --ref-text "کہ دین اسلام کی تمام" \
+        --ref-file reference.wav \
+        --ref-text "<accurate Urdu transcript of reference.wav>" \
         --out final_dub.wav
 
---ref-file/--ref-text should be a short (3-6s), clean, single-sentence clip
-of the speaker with its accurate transcript — this is the "voice sample" the
-whole dub is cloned from, so pick a good one (see README for how we picked
-ours). Segments are generated one at a time, with a short pause inserted
-between them, then concatenated into one output file.
+Re-runnable pipeline note: point --english at any transcript_en.json produced
+by stage 4 (from this recording or a future one) -- no code changes needed.
 """
 import argparse
 import json
@@ -35,7 +44,6 @@ def main():
     parser.add_argument("--ref-file", required=True, help="Reference voice clip (short, clean, single sentence)")
     parser.add_argument("--ref-text", required=True, help="Accurate transcript of the reference clip")
     parser.add_argument("--out", default="final_dub.wav")
-    parser.add_argument("--pause-seconds", type=float, default=0.3)
     parser.add_argument(
         "--model-id", default="bharatgenai/sooktam2", help="HF model id (or local path if already downloaded)"
     )
@@ -47,14 +55,36 @@ def main():
     print(f"Loading {args.model_id} (this can take a minute)...")
     model = AutoModel.from_pretrained(args.model_id, trust_remote_code=True)
 
-    chunks = []
     sample_rate = 24000
+    timeline = np.zeros(0, dtype=np.float32)  # grows as we place segments
+    current_pos_sec = 0.0
+    overruns = 0
+
+    def place_audio(start_sec: float, audio: np.ndarray, sr: float):
+        """Extend `timeline` (padding with silence if needed) and write `audio` at start_sec."""
+        nonlocal timeline
+        start_sample = int(round(start_sec * sr))
+        end_sample = start_sample + len(audio)
+        if end_sample > len(timeline):
+            timeline = np.concatenate([timeline, np.zeros(end_sample - len(timeline), dtype=np.float32)])
+        timeline[start_sample:end_sample] = audio
 
     for i, seg in enumerate(segments):
         text = seg["text"].strip()
+        original_start = seg["start"]
+
+        actual_start = max(original_start, current_pos_sec)
+        if actual_start > original_start + 0.05:  # more than a rounding blip
+            overruns += 1
+
         if not text:
+            # Nothing to say for this segment -- just leave silence, don't advance
+            # current_pos_sec past this segment's own original end, so later
+            # segments can still anchor normally if there's a gap.
+            current_pos_sec = max(current_pos_sec, seg["end"])
             continue
-        print(f"[{i + 1}/{len(segments)}] {text[:60]}")
+
+        print(f"[{i + 1}/{len(segments)}] @{actual_start:6.1f}s  {text[:60]}")
         wav, sr, _ = model.infer(
             ref_file=args.ref_file,
             ref_text=args.ref_text,
@@ -63,16 +93,16 @@ def main():
             cls_language="english",
         )
         sample_rate = sr
-        chunks.append(np.asarray(wav, dtype=np.float32))
-        chunks.append(np.zeros(int(args.pause_seconds * sr), dtype=np.float32))
+        wav = np.asarray(wav, dtype=np.float32)
 
-    if not chunks:
-        print("No segments to synthesize — nothing written.")
-        return
+        place_audio(actual_start, wav, sr)
+        current_pos_sec = actual_start + len(wav) / sr
 
-    final_audio = np.concatenate(chunks)
-    sf.write(args.out, final_audio, sample_rate)
-    print(f"\nWrote {args.out} ({len(final_audio) / sample_rate:.1f} seconds)")
+    sf.write(args.out, timeline, sample_rate)
+    original_total = segments[-1]["end"] if segments else 0.0
+    print(f"\nWrote {args.out}")
+    print(f"Original duration: {original_total / 60:.1f} min | Final dub duration: {len(timeline) / sample_rate / 60:.1f} min")
+    print(f"{overruns} segment(s) ran long and pushed later segments back")
 
 
 if __name__ == "__main__":

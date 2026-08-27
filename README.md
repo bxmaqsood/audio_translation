@@ -41,14 +41,19 @@ python scripts/01_transcribe_urdu.py \
     --model large-v3
 ```
 
-**2. Translate the same audio to English** (Whisper's built-in translate mode, audio → English
-text directly, no separate translation model needed):
+**2. Translate each Urdu segment to English individually**, so English segments map 1:1 to the
+original Urdu timestamps (needed for the timing rules below):
 ```bash
 python scripts/04_translate_ur_to_en.py \
     --audio /mnt/extra/bxm0694/40_minutes_training_audio.m4a \
+    --transcript transcript_ur.json \
     --out transcript_en.json \
     --model large-v3
 ```
+This writes a plain, editable JSON file **before** any audio is generated on purpose — review
+it and hand-fix any translations that read oddly before moving on (translating segment-by-segment
+loses a little cross-sentence context vs. translating the whole passage at once, so occasional
+literal/awkward phrasing is more likely here — worth a skim).
 
 **3. Pick a good reference clip.** You want a short (3-6s), clean, single-sentence clip with an
 accurate transcript. We used `awk` on `dataset/metadata_debug.csv` (from the earlier Chatterbox
@@ -58,7 +63,7 @@ attempt) to find candidates by duration — or just listen to a few candidate se
 ffmpeg -i /mnt/extra/bxm0694/40_minutes_training_audio.m4a -ss <start> -to <end> -ar 24000 -ac 1 reference.wav
 ```
 
-**4. Generate the dub:**
+**4. Generate the dub**, in the `sooktam` conda environment:
 ```bash
 python scripts/05_generate_dub.py \
     --english transcript_en.json \
@@ -66,6 +71,17 @@ python scripts/05_generate_dub.py \
     --ref-text "<accurate Urdu transcript of reference.wav>" \
     --out final_dub.wav
 ```
+**Timing behavior (deliberate, see the script's docstring for full detail):** every segment's
+audio is generated at its natural pace — never sped up or slowed down. Each segment starts at
+the same timestamp its Urdu original started at, whenever possible; if English finishes early,
+the gap is left as silence; if English runs long enough to bump into the next segment's start
+time, the next segment starts immediately after instead (pushed later). Net effect: the final
+dub is never shorter than the original, and can run longer if enough segments overran — but
+every sentence's *start* stays as close to its original timing as the "no speed changes" rule
+allows.
+
+Both stage 4 and stage 5 are reusable as-is for any future Urdu recording — just point them at
+new `--audio`/`--transcript` files.
 
 ## Server setup for Sooktam-2
 
