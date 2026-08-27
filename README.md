@@ -1,99 +1,145 @@
 # Urdu Voice-Cloning Dubbing Pipeline
 
-Take raw Urdu speech from one speaker and produce new audio (e.g. English dubbing) in that
-same cloned voice, by fine-tuning [Chatterbox Multilingual TTS](https://github.com/resemble-ai/chatterbox)
-on the speaker.
+Take raw Urdu speech from one speaker and produce new audio (English dubbing) in that same
+cloned voice.
 
-## Why this approach
+## Current approach: Sooktam-2 zero-shot cloning
 
-Chatterbox has never seen Urdu's Perso-Arabic script, so fine-tuning it directly on raw Urdu
-text with only ~40 minutes of audio fails: it learns the *voice* fine, but can't learn a brand
-new alphabet from that little data and produces gibberish.
+**No fine-tuning required.** [Sooktam-2](https://huggingface.co/bharatgenai/sooktam2) (BharatGen)
+is a TTS model actually pretrained on real Urdu (and Hindi, and 10 other Indian languages)
+speech data, with zero-shot voice cloning built in — give it a short reference clip + its
+transcript, and it clones that voice for any new text, including cross-lingual (Urdu reference
+→ English output), which we've validated sounds both correct and close to the source voice.
 
-Chatterbox Multilingual **does** natively support Hindi (Devanagari script). Since Hindi and
-Urdu are the same spoken language (Hindustani) with different scripts, transliterating the
-Urdu transcript to Devanagari lets fine-tuning lean on language/script knowledge the model
-already has — turning this into a much easier "adapt to a new voice" task instead of "learn a
-new writing system" task.
+**License note:** Sooktam-2's checkpoint is released under a BharatGen **non-commercial**
+license — fine for this project's current (non-commercial) use, but re-check the license if
+usage plans change.
 
-Pipeline: **raw audio → Whisper transcript (Urdu) → transliterate to Devanagari → build
-training clips → LoRA fine-tune Chatterbox → generate dubbed audio in the cloned voice**.
+### Why not fine-tune Chatterbox? (earlier approach, abandoned)
 
-## Status
+We initially tried fine-tuning [Chatterbox Multilingual](https://github.com/resemble-ai/chatterbox)
+(via the [chatterbox-finetuning](https://github.com/gokhaneraslan/chatterbox-finetuning) toolkit),
+transliterating Urdu to Devanagari on the theory that Chatterbox already knows Hindi. That
+theory turned out to be **false for the actual model weights**: Chatterbox's tokenizer *lists*
+Hindi as one of 23 supported languages, but inspecting `resize_and_load_t3_weights` and the
+actual token IDs our text mapped to (1671-1727, all above the 704-token "genuinely pretrained"
+cutoff) confirmed those weights were never actually trained — just reserved, mean-initialized
+placeholders. We were effectively teaching a brand-new script from near-scratch on very little
+data, which produced a well-cloned voice but gibberish "words," even after scaling up training
+data/epochs. Once we found a model (Sooktam-2) with genuine Urdu pretraining, zero-shot cloning
+on it beat everything we got from hours of Chatterbox fine-tuning — so we switched. The old
+Chatterbox scripts (`02_transliterate_ur_to_hi.py`, `03_prepare_dataset.py`) are kept in this
+repo for reference but are no longer part of the active pipeline.
 
-This repo is being built incrementally — see commit history for progress. Scripts are meant to
-run on the GPU server (not here), one stage at a time, with manual sanity checks in between.
+## Pipeline (current)
 
-## Server setup
+**1. Transcribe the Urdu audio** (for picking a good reference clip, and as a sanity check):
+```bash
+python scripts/01_transcribe_urdu.py \
+    --audio /mnt/extra/bxm0694/40_minutes_training_audio.m4a \
+    --out transcript_ur.json \
+    --model large-v3
+```
 
+**2. Translate the same audio to English** (Whisper's built-in translate mode, audio → English
+text directly, no separate translation model needed):
+```bash
+python scripts/04_translate_ur_to_en.py \
+    --audio /mnt/extra/bxm0694/40_minutes_training_audio.m4a \
+    --out transcript_en.json \
+    --model large-v3
+```
+
+**3. Pick a good reference clip.** You want a short (3-6s), clean, single-sentence clip with an
+accurate transcript. We used `awk` on `dataset/metadata_debug.csv` (from the earlier Chatterbox
+attempt) to find candidates by duration — or just listen to a few candidate segments from
+`transcript_ur.json` and slice one out with `ffmpeg`:
+```bash
+ffmpeg -i /mnt/extra/bxm0694/40_minutes_training_audio.m4a -ss <start> -to <end> -ar 24000 -ac 1 reference.wav
+```
+
+**4. Generate the dub:**
+```bash
+python scripts/05_generate_dub.py \
+    --english transcript_en.json \
+    --ref-file reference.wav \
+    --ref-text "<accurate Urdu transcript of reference.wav>" \
+    --out final_dub.wav
+```
+
+## Server setup for Sooktam-2
+
+This environment has several real gotchas worth documenting — we hit all of them:
+
+```bash
+# 1. Separate conda env (avoid dependency conflicts with the Chatterbox env)
+CONDA_NO_PLUGINS=true conda create -n sooktam -c conda-forge python=3.10 -y --solver classic
+conda activate sooktam
+
+# 2. Clone the model repo
+git clone https://huggingface.co/bharatgenai/sooktam2
+cd sooktam2
+
+# 3. setup-cls.sh tries `apt-get install libcudnn9-cuda-12` which needs root we don't have.
+#    Skip it — the pip-installed torch wheel already bundles a compatible cuDNN.
+sed -i 's|    apt-get install libcudnn9-cuda-12 -y|    :  # skipped: no sudo, torch wheel bundles its own cudnn|' setup-cls.sh
+bash setup-cls.sh
+
+# 4. `git clone` doesn't fetch Git LFS content (git-lfs isn't installed, and we can't
+#    apt-get it either) — the large checkpoint files download as ~135-byte pointer stubs.
+#    Pull the real weights directly over HTTPS instead:
+wget -O model_1250000.pt "https://huggingface.co/bharatgenai/sooktam2/resolve/main/model_1250000.pt"
+wget -O sooktam.safetensors "https://huggingface.co/bharatgenai/sooktam2/resolve/main/sooktam.safetensors"
+
+# 5. PyTorch 2.6 changed torch.load's default weights_only=True, which breaks loading this
+#    (trusted, official) checkpoint. Patch the vendored loader:
+sed -i 's/weights_only=True/weights_only=False/g' src/f5_tts/infer/utils_infer.py
+```
+
+After that, `scripts/05_generate_dub.py` (run from this repo, in the `sooktam` env) works as
+documented above.
+
+### Notes on `model.infer()` parameters
+- `cls_language`: `"urdu"` or `"english"` (also hindi, marathi, etc. — see the model card for
+  the full list). Controls how the *target* text is read/pronounced; the reference clip's
+  language doesn't need to match (we validated Urdu reference → English output works well).
+- Don't pass `fix_duration` unless you have a specific reason to — it stretches/compresses
+  the *same* amount of speech content to fit a fixed time rather than generating more content,
+  which sounds unnatural. Let it auto-estimate duration from the actual target text length.
+
+## Archived: Chatterbox fine-tuning pipeline
+
+The scripts and setup below are kept for reference but are **not the active pipeline** —
+see "Why not fine-tune Chatterbox?" above.
+
+### Chatterbox server setup
 ```bash
 conda create -n dub python=3.10 -y
 conda activate dub
-
-# Match torch's CUDA build to the server's driver (575.57 / CUDA 12.9 — cu124 wheels work)
-pip install torch --index-url https://download.pytorch.org/whl/cu124
-
+pip install torch --index-url https://download.pytorch.org/whl/cu124   # matches driver 575.57 / CUDA 12.9
 pip install -r requirements.txt
 pip install chatterbox-tts
-
-# Third-party fine-tuning toolkit (not vendored in this repo)
 git clone https://github.com/gokhaneraslan/chatterbox-finetuning.git
 ```
+`pydub` needs `ffmpeg` on PATH — install via conda if not present and you lack sudo:
+`conda install -c conda-forge ffmpeg -y`.
 
-`pydub` needs `ffmpeg` on PATH — check with `ffmpeg -version`; install via `sudo apt install
-ffmpeg` if missing (or ask the admin, since this account isn't in sudoers).
-
-## Get the audio onto the server
-
-From your Windows machine:
+### Get the audio onto the server
 ```bash
 scp path/to/your_audio.wav bxm0694@oitrss-ardcdept-136.shost.uta.edu:/mnt/extra/bxm0694/
 ```
 
-## Pipeline steps
-
-Detailed commands for each stage are added below as the corresponding script lands in this
-repo. Run them in order from the server, in the `dub` conda environment.
-
-### 1. Transcribe (Urdu)
-```bash
-python scripts/01_transcribe_urdu.py \
-    --audio /mnt/extra/bxm0694/speaker.wav \
-    --out transcript_ur.json \
-    --model large-v3
-```
-Prints the first few segments so you can eyeball transcription quality immediately. Re-run
-with `--model medium` if `large-v3` is too slow for a quick test, but use `large-v3` for the
-real run — Urdu accuracy matters a lot here since every downstream stage depends on it.
-
 ### 2. Transliterate Urdu → Devanagari
-**Always preview a sample first** — this is where the earlier attempt at this approach failed
-silently with a bad converter:
 ```bash
-python scripts/02_transliterate_ur_to_hi.py --in transcript_ur.json --sample 8
-```
-Read the printed pairs and confirm the Devanagari genuinely reads as the same Hindustani words.
-Only once that looks right, run the full pass:
-```bash
+python scripts/02_transliterate_ur_to_hi.py --in transcript_ur.json --sample 8   # preview first
 python scripts/02_transliterate_ur_to_hi.py --in transcript_ur.json --out transcript_hi.json --all
 ```
-This caches results in `transliteration_cache.json` (safe to re-run/resume).
-
-**Known issue:** the online API (`sangam.learnpunjabi.org`, an old academic service) is
-currently returning HTTP 500 errors — it's disabled by default. The offline converter is used
-instead; it occasionally produces stray non-Devanagari symbols or rare/unusual characters, which
-the script strips or flags automatically. Any flagged segments are written to
-`flagged_segments.json` for manual review before training — check that file and hand-fix or drop
-those segments rather than feeding them into fine-tuning as-is.
-
-Install its one missing dependency first if you haven't:
-```bash
-pip install indic-nlp-library
-```
+Requires `pip install indo-arabic-transliteration indic-nlp-library` — importing its offline
+converter also needs a workaround for a broken transitive dependency chain (`urduhack` →
+`tensorflow_addons` → incompatible Keras 3); the script stubs this out internally. See git
+history on this file for the debugging trail if this comes up again with a different package.
 
 ### 3. Build the fine-tuning dataset
-Slices the source audio into per-segment clips (trimming silence at the edges) and writes an
-LJSpeech-style `metadata.csv` using the Devanagari text:
 ```bash
 python scripts/03_prepare_dataset.py \
     --audio /mnt/extra/bxm0694/40_minutes_training_audio.m4a \
@@ -101,38 +147,14 @@ python scripts/03_prepare_dataset.py \
     --out-dir dataset \
     --prefix rec1
 ```
-Prints how many clips were kept vs. skipped (too short/too long) and the total kept duration.
-Check `dataset/metadata_debug.csv` afterwards — it has the Urdu + Devanagari text side by side
-with timing, useful for spot-checking a few clips by ear against their text.
+Supports `--append`/`--prefix` for merging multiple source recordings into one dataset.
 
-**Adding more recordings of the same speaker to grow the dataset:** run stages 1-3 again for
-each new audio file, using a different `--prefix` (so filenames don't collide) and `--append`
-on stage 3 (so you don't overwrite the existing metadata):
-```bash
-python scripts/01_transcribe_urdu.py --audio /path/to/recording2.wav --out transcript_ur_2.json
-python scripts/02_transliterate_ur_to_hi.py --in transcript_ur_2.json --sample 8   # sanity check first
-python scripts/02_transliterate_ur_to_hi.py --in transcript_ur_2.json --out transcript_hi_2.json --all
-python scripts/03_prepare_dataset.py \
-    --audio /path/to/recording2.wav \
-    --transcript transcript_hi_2.json \
-    --out-dir dataset \
-    --prefix rec2 \
-    --append
-```
-
-### 4. Fine-tune Chatterbox
-_Pending._
-
-### 5. Generate dubbed audio
-_Pending._
-
-## Important caveats
-
-- The Urdu→Devanagari transliteration relies partly on an external API
-  (`indo_arabic_transliteration.sangam_api`) for best accuracy. **Always sanity-check a small
-  sample of the output by eye before running the full dataset through it** — a bad converter is
-  exactly what broke the first attempt at this approach.
-- `chatterbox-finetuning`'s exact config field names and inference API should be double-checked
-  against the actual cloned repo/installed package version once you're on the server — this
-  README documents the intended usage, but third-party APIs can drift from what's summarized
-  here.
+### Fine-tuning & known toolkit bugs
+- Force single-GPU (`CUDA_VISIBLE_DEVICES=0`) — this toolkit's use of PyTorch's legacy
+  `DataParallel` across multiple GPUs crashes on an internal assertion.
+- `pip install tf-keras setuptools<70` — needed to work around `transformers` and `perth`
+  (audio watermarking) import failures in this environment.
+- `src/chatterbox_/models/t3/inference/alignment_stream_analyzer.py` has a real bug: its
+  "3x repetition" check only actually checks the last 2 tokens, not 3.
+- Root cause of poor output quality: see "Why not fine-tune Chatterbox?" above — this wasn't a
+  bug we could fix, it was a fundamental data/pretraining gap.
