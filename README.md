@@ -41,11 +41,20 @@ python scripts/01_transcribe_urdu.py \
     --model large-v3
 ```
 
-**2. Translate each Urdu segment's text to English**, using IndicTrans2 (a dedicated Urdu→English
-MT model, not Whisper's general translate mode — we switched after finding Whisper's per-clip
-audio translation both lower quality and prone to misdetecting the language on short clips):
+**2. Translate each Urdu segment's text to English**, using the Claude API with full surrounding
+context. Two earlier approaches were tried and abandoned: Whisper's per-clip translate mode
+(prone to misdetecting the language on short clips) and IndicTrans2 (a dedicated MT model, but
+translating each segment in total isolation). Both suffer from the same root problem: Whisper's
+segments are split on *pauses*, not grammatical sentence boundaries, so many segments are
+incomplete clauses — translated alone, they come out broken or misleading regardless of how good
+the translator is. The Claude-based approach batches several consecutive segments per call (with
+a little trailing context from the previous batch) and asks for one translation per segment id,
+worded so that concatenated in order they read as a fluent passage — fixing translation quality
+**without** merging segments or losing the per-segment timestamps stage 5 needs for audio-sync
+anchoring.
 ```bash
-pip install IndicTransToolkit
+pip install anthropic
+export ANTHROPIC_API_KEY=<your key>   # or `ant auth login` if using a CLI-managed profile
 python scripts/04_translate_ur_to_en.py \
     --transcript transcript_ur.json \
     --out transcript_en.json
