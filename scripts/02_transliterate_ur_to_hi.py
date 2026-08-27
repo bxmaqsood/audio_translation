@@ -54,6 +54,15 @@ CACHE_PATH = "transliteration_cache.json"
 # Stray marks the offline converter leaves behind that aren't real Devanagari
 STRAY_MARKS = re.compile(r"[ʿʾ]")  # ʿ (ain) and ʾ (hamza) modifier letters
 
+# Known, reproducible mapping bugs in the offline converter: the Urdu letter ظ
+# consistently comes out as the rare/wrong "ॹ़" (U+0979 + nukta) instead of the
+# correct "ज़" (same sound as ز/ض, which map correctly). Fix these directly
+# rather than just flagging them, since they're systematic, not random noise.
+KNOWN_BUGS = {
+    "ॹ़": "ज़",
+    "ॹ": "ज़",
+}
+
 # Characters considered normal in transliterated Hindustani text: the commonly-used
 # Devanagari subset (U+0900-U+096F: vowels, consonants, nukta letters, matras,
 # digits, danda) plus whitespace and basic ASCII. Deliberately excludes U+0970+,
@@ -63,8 +72,11 @@ ALLOWED_CHARS = re.compile(r"^[ऀ-९ -~\s]*$")
 
 
 def sanitize(text_hi: str) -> tuple[str, bool]:
-    """Strip known stray marks; return (cleaned_text, needs_review)."""
-    cleaned = STRAY_MARKS.sub("", text_hi)
+    """Fix known bugs and strip stray marks; return (cleaned_text, needs_review)."""
+    cleaned = text_hi
+    for bad, good in KNOWN_BUGS.items():
+        cleaned = cleaned.replace(bad, good)
+    cleaned = STRAY_MARKS.sub("", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     needs_review = not bool(ALLOWED_CHARS.match(cleaned))
     return cleaned, needs_review
