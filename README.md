@@ -67,7 +67,19 @@ with `--model medium` if `large-v3` is too slow for a quick test, but use `large
 real run — Urdu accuracy matters a lot here since every downstream stage depends on it.
 
 ### 2. Transliterate Urdu → Devanagari
-_Pending._
+**Always preview a sample first** — this is where the earlier attempt at this approach failed
+silently with a bad converter:
+```bash
+python scripts/02_transliterate_ur_to_hi.py --in transcript_ur.json --sample 8
+```
+Read the printed pairs and confirm the Devanagari genuinely reads as the same Hindustani words.
+Only once that looks right, run the full pass:
+```bash
+python scripts/02_transliterate_ur_to_hi.py --in transcript_ur.json --out transcript_hi.json --all
+```
+This caches results in `transliteration_cache.json` (safe to re-run/resume) and warns if any
+segments fell back to the weaker offline converter (the online API is preferred but occasionally
+unreachable/rate-limited).
 
 ### 3. Build the fine-tuning dataset
 _Pending._
