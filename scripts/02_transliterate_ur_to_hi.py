@@ -54,6 +54,15 @@ CACHE_PATH = "transliteration_cache.json"
 # Stray marks the offline converter leaves behind that aren't real Devanagari
 STRAY_MARKS = re.compile(r"[ʿʾ]")  # ʿ (ain) and ʾ (hamza) modifier letters
 
+# Whisper sometimes renders spoken religious honorifics as a single Arabic
+# ligature symbol rather than words (e.g. "peace be upon him" after the
+# Prophet's name). Expand these to the actual words before transliterating,
+# since the speaker really says the full phrase in the audio.
+HONORIFIC_EXPANSIONS = {
+    "ﷺ": "صلی اللہ علیہ وسلم",  # sallallahu alaihi wasallam
+    "﷽": "بسم اللہ الرحمن الرحیم",  # bismillah ir-rahman ir-rahim
+}
+
 # Known, reproducible mapping bugs in the offline converter: the Urdu letter ظ
 # consistently comes out as the rare/wrong "ॹ़" (U+0979 + nukta) instead of the
 # correct "ज़" (same sound as ز/ض, which map correctly). Fix these directly
@@ -94,8 +103,15 @@ def save_cache(cache: dict) -> None:
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
 
+def expand_honorifics(text: str) -> str:
+    for symbol, words in HONORIFIC_EXPANSIONS.items():
+        text = text.replace(symbol, words)
+    return text
+
+
 def transliterate_one(text: str, cache: dict, try_online: bool, retries: int = 2) -> dict:
     """Returns {"text_hi": ..., "method": ..., "needs_review": bool}. Cached by text hash."""
+    text = expand_honorifics(text)
     key = hashlib.sha256(text.encode("utf-8")).hexdigest()
     if key in cache:
         return cache[key]
