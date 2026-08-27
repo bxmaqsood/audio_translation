@@ -27,15 +27,42 @@ Usage:
         --ref-text "<accurate Urdu transcript of reference.wav>" \
         --out final_dub.wav
 
+Optional --speed (e.g. --speed 0.65) uniformly slows down (or speeds up) each
+GENERATED segment's own audio before it's placed into the timeline -- pitch
+is preserved (ffmpeg's atempo filter, not a naive resample), so a slowed
+voice sounds calmer/more measured, not deeper. This does not change the
+timing RULES above: a slowed segment is just longer, so the existing
+"anchor to original timestamp, never rewind, push later segments if this one
+overran" logic handles it automatically -- no special-casing needed.
+
 Re-runnable pipeline note: point --english at any transcript_en.json produced
 by stage 4 (from this recording or a future one) -- no code changes needed.
 """
 import argparse
 import json
+import os
+import subprocess
+import tempfile
 
 import numpy as np
 import soundfile as sf
 from transformers import AutoModel
+
+
+def apply_speed(wav: np.ndarray, sr: int, speed: float) -> np.ndarray:
+    """Pitch-preserving speed change via ffmpeg's atempo filter (valid range 0.5-100.0)."""
+    if speed == 1.0:
+        return wav
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        in_path = os.path.join(tmp_dir, "in.wav")
+        out_path = os.path.join(tmp_dir, "out.wav")
+        sf.write(in_path, wav, sr)
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", in_path, "-filter:a", f"atempo={speed}", out_path],
+            check=True,
+        )
+        out_wav, _ = sf.read(out_path, dtype="float32")
+        return out_wav
 
 
 def main():
@@ -49,6 +76,13 @@ def main():
         default="/mnt/extra/bxm0694/sooktam2",
         help="Local path to the downloaded Sooktam-2 repo (or a HF hub id, but the local path "
         "avoids re-downloading and works regardless of your current directory)",
+    )
+    parser.add_argument(
+        "--speed",
+        type=float,
+        default=1.0,
+        help="Speed multiplier applied to each generated segment's audio before placement "
+        "(e.g. 0.65 = 65%% speed, slower/longer; pitch is preserved). Default 1.0 = unchanged.",
     )
     args = parser.parse_args()
 
@@ -97,6 +131,7 @@ def main():
         )
         sample_rate = sr
         wav = np.asarray(wav, dtype=np.float32)
+        wav = apply_speed(wav, sr, args.speed)
 
         place_audio(actual_start, wav, sr)
         current_pos_sec = actual_start + len(wav) / sr

@@ -94,13 +94,27 @@ python scripts/05_generate_dub.py \
     --out final_dub.wav
 ```
 **Timing behavior (deliberate, see the script's docstring for full detail):** every segment's
-audio is generated at its natural pace — never sped up or slowed down. Each segment starts at
-the same timestamp its Urdu original started at, whenever possible; if English finishes early,
-the gap is left as silence; if English runs long enough to bump into the next segment's start
-time, the next segment starts immediately after instead (pushed later). Net effect: the final
-dub is never shorter than the original, and can run longer if enough segments overran — but
-every sentence's *start* stays as close to its original timing as the "no speed changes" rule
-allows.
+audio is generated at its natural pace by default — never sped up or slowed down. Each segment
+starts at the same timestamp its Urdu original started at, whenever possible; if English
+finishes early, the gap is left as silence; if English runs long enough to bump into the next
+segment's start time, the next segment starts immediately after instead (pushed later). Net
+effect: the final dub is never shorter than the original, and can run longer if enough segments
+overran — but every sentence's *start* stays as close to its original timing as the "no speed
+changes" rule allows.
+
+**Optional deliberate slowdown/speedup:** pass `--speed 0.65` (or any factor) to uniformly
+change the pace of each *generated* segment before it's placed — pitch-preserving (ffmpeg
+`atempo`, not a naive resample), so it sounds calmer/more measured, not deeper/robotic. This
+changes segment *duration*, not the timing rules above — a slowed segment is just longer, so
+the existing anchor/push-back logic handles it automatically:
+```bash
+python scripts/05_generate_dub.py \
+    --english transcript_en.json \
+    --ref-file reference.wav \
+    --ref-text "<accurate Urdu transcript of reference.wav>" \
+    --out final_dub_slow065.wav \
+    --speed 0.65
+```
 
 Both stage 4 and stage 5 are reusable as-is for any future Urdu recording — just point them at
 new `--audio`/`--transcript` files.
