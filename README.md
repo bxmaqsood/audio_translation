@@ -119,6 +119,68 @@ python scripts/05_generate_dub.py \
 Both stage 4 and stage 5 are reusable as-is for any future Urdu recording — just point them at
 new `--audio`/`--transcript` files.
 
+## Fine-tuning Sooktam-2 for more natural prosody (optional)
+
+Zero-shot cloning (above) works well for correctness/voice-match but can sound flat/"like
+reading" — it only has a ~4s reference clip to learn from, which captures timbre but not how
+this speaker actually varies pitch/rhythm/emphasis across real speech. Fine-tuning on the
+speaker's full recording should fix this.
+
+**This is not the same trap as the Chatterbox attempt.** That failed because Devanagari had
+*zero* real pretraining in the checkpoint. Sooktam-2 already has working Urdu pretraining
+(that's why zero-shot cloning already sounds correct) — fine-tuning here only deepens
+voice-specific delivery, a well-precedented task.
+
+Sooktam-2 ships inference-only (no training code), but its `config.json` confirms
+`"model_name": "F5TTS_v1_Base"` — it's built on upstream [F5-TTS](https://github.com/SWivid/F5-TTS)'s
+exact architecture, and its checkpoint filename (`model_1250000.pt`) matches F5TTS_v1_Base's own
+default checkpoint step count, strongly suggesting Sooktam-2 was itself trained by continuing
+from that base — so F5-TTS's own fine-tuning code should load it cleanly.
+
+```bash
+# 1. Get upstream F5-TTS (has the training code Sooktam-2's repo lacks)
+cd /mnt/extra/bxm0694/
+git clone https://github.com/SWivid/F5-TTS.git
+
+# 2. Build the training dataset (real Urdu text, pause-grouped sentences -- same
+#    grouping as stage 4, reused here for natural-sounding training clips)
+python scripts/06_prepare_f5tts_dataset.py \
+    --audio /mnt/extra/bxm0694/40_minutes_training_audio.m4a \
+    --transcript transcript_ur.json \
+    --out-dir /mnt/extra/bxm0694/f5tts_dataset
+
+# 3. Convert to F5-TTS's internal training format
+cd F5-TTS
+python src/f5_tts/train/datasets/prepare_csv_wavs.py \
+    /mnt/extra/bxm0694/f5tts_dataset/metadata.csv \
+    data/urdu_speaker1_custom
+
+# 4. Fine-tune, starting from Sooktam-2's checkpoint, using its own custom Indic
+#    tokenizer (NOT the default pinyin one -- that's for the Chinese/English base
+#    model and would mismatch Sooktam-2's actual vocabulary)
+python src/f5_tts/train/finetune_cli.py \
+    --finetune \
+    --pretrain /mnt/extra/bxm0694/sooktam2/model_1250000.pt \
+    --tokenizer custom \
+    --tokenizer_path /mnt/extra/bxm0694/sooktam2/vocab.txt \
+    --dataset_name urdu_speaker1 \
+    --exp_name F5TTS_v1_Base \
+    --learning_rate 1e-5 \
+    --epochs 20 \
+    --save_per_updates 500 \
+    --last_per_updates 100
+```
+Notes:
+- `--dataset_name` must match what you used in step 3 (`urdu_speaker1`) — the script looks for
+  `data/{dataset_name}_{tokenizer}` (so `data/urdu_speaker1_custom`, matching step 3's output dir).
+- Checkpoints are saved under `F5-TTS/ckpts/urdu_speaker1/`.
+- Full fine-tune (not LoRA — the official script doesn't support it) on only ~40 minutes of data
+  risks overfitting fast. Start with few epochs (`--epochs 20`, not the 100 default) and check
+  intermediate checkpoints rather than assuming more training is better — same lesson as the
+  Chatterbox loss-vs-generation-quality mismatch (see git history for that investigation).
+- Batch size is in mel-spectrogram *frames* (`--batch_size_per_gpu`, default 3200), not sample
+  count — reduce it if you hit CUDA OOM on the L40S.
+
 ## Server setup for Sooktam-2
 
 This environment has several real gotchas worth documenting — we hit all of them:
