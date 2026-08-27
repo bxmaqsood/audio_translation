@@ -242,7 +242,33 @@ for name, subset in [('train', rows[n_val:]), ('val', rows[:n_val])]:
 "
 ```
 Train only on `metadata_train.csv` (via `prepare_csv_wavs.py` + `finetune_cli.py` as above);
-`metadata_val.csv` stays held out for the evaluation script (see next commit).
+`metadata_val.csv` stays held out for the evaluation script below.
+
+### Evaluating checkpoints against the held-out set
+
+Prepare the validation set in F5-TTS's format once:
+```bash
+cd /mnt/extra/bxm0694/F5-TTS
+python src/f5_tts/train/datasets/prepare_csv_wavs.py \
+    /mnt/extra/bxm0694/f5tts_dataset/metadata_val.csv \
+    data/urdu_speaker1_val_custom
+```
+Then run `scripts/07_evaluate_f5tts_checkpoints.py` (from this repo) against each saved
+checkpoint — it replicates just enough of `finetune_cli.py`'s own model-construction and loss
+code to run a forward-only pass (no gradient updates) over the held-out clips:
+```bash
+for ckpt in ckpts/urdu_speaker1/model_*.pt; do
+    python /home/bxm0694/audio_translation/scripts/07_evaluate_f5tts_checkpoints.py \
+        --checkpoint "$ckpt" \
+        --val-dataset-name urdu_speaker1_val \
+        --tokenizer-path /mnt/extra/bxm0694/sooktam2/vocab.txt
+done
+```
+Pick the checkpoint with the lowest `val_loss` — **not** the one with the lowest training loss,
+and not necessarily the last/final one (see git history / conversation for why: training loss
+mostly measures memorization of the specific training clips, not generalization). Validation
+loss narrows down candidates; still listen to the top 2-3 before committing to one, since even
+validation loss is an imperfect proxy for perceived naturalness.
 
 ## Server setup for Sooktam-2
 
