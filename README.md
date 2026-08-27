@@ -92,7 +92,17 @@ pip install indic-nlp-library
 ```
 
 ### 3. Build the fine-tuning dataset
-_Pending._
+Slices the source audio into per-segment clips (trimming silence at the edges) and writes an
+LJSpeech-style `metadata.csv` using the Devanagari text:
+```bash
+python scripts/03_prepare_dataset.py \
+    --audio /mnt/extra/bxm0694/40_minutes_training_audio.m4a \
+    --transcript transcript_hi.json \
+    --out-dir dataset
+```
+Prints how many clips were kept vs. skipped (too short/too long) and the total kept duration.
+Check `dataset/metadata_debug.csv` afterwards — it has the Urdu + Devanagari text side by side
+with timing, useful for spot-checking a few clips by ear against their text.
 
 ### 4. Fine-tune Chatterbox
 _Pending._
