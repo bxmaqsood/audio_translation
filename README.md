@@ -9,13 +9,14 @@ voice, cloned and then taught to speak a language it never has.
 batch. What follows below is the technical reference: setup, exact commands, and every gotcha
 hit along the way, for anyone reproducing or extending this.
 
-**Where it landed:** zero-shot cloning with [Sooktam-2](#current-approach-sooktam-2-zero-shot-cloning)
-gets a correct, recognizable clone straight away; fine-tuning it further on the speaker's own
-audio (see [below](#fine-tuning-sooktam-2-for-more-natural-prosody-optional)) noticeably improves
-how natural the delivery sounds, picked via held-out validation loss rather than the last
-checkpoint on disk — [checkpoint 700 won, the final one scored among the worst](#validation-loss-for-fine-tuning-no-built-in-support-in-f5-ttss-trainer).
+**Where it landed:** zero-shot cloning with [Sooktam-2](#base-approach-sooktam-2-zero-shot-cloning-quick-start)
+gets a correct, recognizable clone straight away, and is enough to start with. **Fine-tuning it
+further on the speaker's own audio is the recommended path for production quality** — see
+[below](#recommended-fine-tuning-sooktam-2-for-natural-delivery) — picked via held-out validation
+loss rather than the last checkpoint on disk:
+[checkpoint 700 won, the final one scored among the worst](#validation-loss-for-fine-tuning-no-built-in-support-in-f5-ttss-trainer).
 
-## Current approach: Sooktam-2 zero-shot cloning
+## Base approach: Sooktam-2 zero-shot cloning (quick start)
 
 **No fine-tuning required.** [Sooktam-2](https://huggingface.co/bharatgenai/sooktam2) (BharatGen)
 is a TTS model actually pretrained on real Urdu (and Hindi, and 10 other Indian languages)
@@ -26,6 +27,12 @@ transcript, and it clones that voice for any new text, including cross-lingual (
 **License note:** Sooktam-2's checkpoint is released under a BharatGen **non-commercial**
 license — fine for this project's current (non-commercial) use, but re-check the license if
 usage plans change.
+
+Zero-shot is a good starting point to confirm the pipeline works end-to-end, but it only has a
+few seconds of reference audio to draw from — correct, but flatter than the speaker actually
+sounds. For real output, go straight to
+[fine-tuning Sooktam-2](#recommended-fine-tuning-sooktam-2-for-natural-delivery) once the basic
+pipeline below is confirmed working.
 
 ### Why not fine-tune Chatterbox? (earlier approach, abandoned)
 
@@ -131,7 +138,7 @@ python scripts/05_generate_dub.py \
 Both stage 4 and stage 5 are reusable as-is for any future Urdu recording — just point them at
 new `--audio`/`--transcript` files.
 
-## Fine-tuning Sooktam-2 for more natural prosody (optional)
+## Recommended: fine-tuning Sooktam-2 for natural delivery
 
 Zero-shot cloning (above) works well for correctness/voice-match but can sound flat/"like
 reading" — it only has a ~4s reference clip to learn from, which captures timbre but not how
