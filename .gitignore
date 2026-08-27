@@ -1,0 +1,21 @@
+# Data & model artifacts (never commit large/private files)
+data/
+dataset/
+checkpoints/
+outputs/
+*.wav
+*.mp3
+*.mp4
+*.m4a
+transcript_*.json
+transliteration_cache.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Third-party toolkit (cloned separately per README, not vendored)
+chatterbox-finetuning/

@@ -1,0 +1,82 @@
+# Urdu Voice-Cloning Dubbing Pipeline
+
+Take raw Urdu speech from one speaker and produce new audio (e.g. English dubbing) in that
+same cloned voice, by fine-tuning [Chatterbox Multilingual TTS](https://github.com/resemble-ai/chatterbox)
+on the speaker.
+
+## Why this approach
+
+Chatterbox has never seen Urdu's Perso-Arabic script, so fine-tuning it directly on raw Urdu
+text with only ~40 minutes of audio fails: it learns the *voice* fine, but can't learn a brand
+new alphabet from that little data and produces gibberish.
+
+Chatterbox Multilingual **does** natively support Hindi (Devanagari script). Since Hindi and
+Urdu are the same spoken language (Hindustani) with different scripts, transliterating the
+Urdu transcript to Devanagari lets fine-tuning lean on language/script knowledge the model
+already has — turning this into a much easier "adapt to a new voice" task instead of "learn a
+new writing system" task.
+
+Pipeline: **raw audio → Whisper transcript (Urdu) → transliterate to Devanagari → build
+training clips → LoRA fine-tune Chatterbox → generate dubbed audio in the cloned voice**.
+
+## Status
+
+This repo is being built incrementally — see commit history for progress. Scripts are meant to
+run on the GPU server (not here), one stage at a time, with manual sanity checks in between.
+
+## Server setup
+
+```bash
+conda create -n dub python=3.10 -y
+conda activate dub
+
+# Match torch's CUDA build to the server's driver (575.57 / CUDA 12.9 — cu124 wheels work)
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+
+pip install -r requirements.txt
+pip install chatterbox-tts
+
+# Third-party fine-tuning toolkit (not vendored in this repo)
+git clone https://github.com/gokhaneraslan/chatterbox-finetuning.git
+```
+
+`pydub` needs `ffmpeg` on PATH — check with `ffmpeg -version`; install via `sudo apt install
+ffmpeg` if missing (or ask the admin, since this account isn't in sudoers).
+
+## Get the audio onto the server
+
+From your Windows machine:
+```bash
+scp path/to/your_audio.wav bxm0694@oitrss-ardcdept-136.shost.uta.edu:/mnt/extra/bxm0694/
+```
+
+## Pipeline steps
+
+Detailed commands for each stage are added below as the corresponding script lands in this
+repo. Run them in order from the server, in the `dub` conda environment.
+
+### 1. Transcribe (Urdu)
+_Coming next commit — `scripts/01_transcribe_urdu.py`._
+
+### 2. Transliterate Urdu → Devanagari
+_Pending._
+
+### 3. Build the fine-tuning dataset
+_Pending._
+
+### 4. Fine-tune Chatterbox
+_Pending._
+
+### 5. Generate dubbed audio
+_Pending._
+
+## Important caveats
+
+- The Urdu→Devanagari transliteration relies partly on an external API
+  (`indo_arabic_transliteration.sangam_api`) for best accuracy. **Always sanity-check a small
+  sample of the output by eye before running the full dataset through it** — a bad converter is
+  exactly what broke the first attempt at this approach.
+- `chatterbox-finetuning`'s exact config field names and inference API should be double-checked
+  against the actual cloned repo/installed package version once you're on the server — this
+  README documents the intended usage, but third-party APIs can drift from what's summarized
+  here.

@@ -1,0 +1,8 @@
+# Install torch separately first, matching the server's CUDA version — see README.
+openai-whisper
+indo-arabic-transliteration
+pydub
+soundfile
+librosa
+pandas
+tqdm
