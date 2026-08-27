@@ -180,6 +180,69 @@ Notes:
   Chatterbox loss-vs-generation-quality mismatch (see git history for that investigation).
 - Batch size is in mel-spectrogram *frames* (`--batch_size_per_gpu`, default 3200), not sample
   count — reduce it if you hit CUDA OOM on the L40S.
+- **Always `rm -rf ckpts/<dataset_name>` before a fresh attempt.** `load_checkpoint()` prioritizes
+  any existing `model_last.pt`/`pretrained_*` files in that directory over `--pretrain`, so a
+  stale file from a previous (possibly broken) attempt silently gets reused instead of your fix.
+
+### Three real bugs we hit and fixed (all confirmed, not guesses)
+
+1. **Training silently does nothing (no progress, no error) when fine-tuning a checkpoint with a
+   high step count.** `trainer.train()`'s resume logic computes
+   `skipped_epoch = start_update // batches_per_epoch`. Sooktam-2's checkpoint carries its own
+   original step count (1,250,000) baked into an `"update"` key; with our small dataset's few
+   batches-per-epoch, `skipped_epoch` comes out far larger than `--epochs`, so
+   `for epoch in range(skipped_epoch, self.epochs)` is an empty range — nothing trains.
+   **Fix:** strip the training-state keys, keeping only `ema_model_state_dict`, so
+   `load_checkpoint()` treats it as fresh pretrained weights (`update=0`) instead of "resume this
+   exact run":
+   ```python
+   import torch
+   ckpt = torch.load('/mnt/extra/bxm0694/sooktam2/model_1250000.pt', map_location='cpu', weights_only=False)
+   torch.save({'ema_model_state_dict': ckpt['ema_model_state_dict']},
+              '/mnt/extra/bxm0694/sooktam2/model_1250000_clean_for_finetune.pt')
+   ```
+   Use that `_clean_for_finetune.pt` file as `--pretrain`, not the original.
+
+2. **`--num_warmup_updates` defaults to 20,000**, far more than a small fine-tune dataset's total
+   planned updates (e.g. ~800 for 20 epochs on ~280 clips) — the LR schedule's warmup phase never
+   finishes, so the effective learning rate stays near-zero for the entire run. Set
+   `--num_warmup_updates` to something proportional (we used 50).
+
+3. **`RuntimeError: Function 'ScaledDotProductEfficientAttentionBackward0' returned nan values`**
+   — loss is valid on the very first update, then NaN forever after (confirmed conclusively via
+   `torch.autograd.set_detect_anomaly(True)`, which pinpoints this exact op; lowering the learning
+   rate by 1000x made no difference, ruling out "gradient too large" as the cause). This is a
+   known PyTorch numerical-stability issue in the memory-efficient/flash `scaled_dot_product_
+   attention` backward pass, not a data or checkpoint problem. **Fix:** force the more stable
+   "math" SDPA backend for training — add near the top of `finetune_cli.py` (after `import torch`):
+   ```python
+   torch.backends.cuda.enable_mem_efficient_sdp(False)
+   torch.backends.cuda.enable_flash_sdp(False)
+   torch.backends.cuda.enable_math_sdp(True)
+   ```
+
+## Validation loss for fine-tuning (no built-in support in F5-TTS's trainer)
+
+F5-TTS's `Trainer`/`finetune_cli.py` has zero built-in validation/held-out-loss support — we
+checked (`grep -n "val_dataset\|validation\|eval_dataset" trainer.py finetune_cli.py` returns
+nothing). Rather than patch the training loop itself (real risk of new bugs, given how much
+debugging the loop already needed), we hold out a validation split up front and evaluate saved
+checkpoints against it with a separate, standalone script instead of live during training:
+```bash
+python3 -c "
+import csv, random
+random.seed(42)
+with open('/mnt/extra/bxm0694/f5tts_dataset/metadata_clean.csv', encoding='utf-8') as f:
+    reader = csv.reader(f, delimiter='|'); header = next(reader); rows = list(reader)
+random.shuffle(rows)
+n_val = max(10, int(len(rows) * 0.1))
+for name, subset in [('train', rows[n_val:]), ('val', rows[:n_val])]:
+    with open(f'/mnt/extra/bxm0694/f5tts_dataset/metadata_{name}.csv', 'w', newline='', encoding='utf-8') as f:
+        w = csv.writer(f, delimiter='|'); w.writerow(header); w.writerows(subset)
+"
+```
+Train only on `metadata_train.csv` (via `prepare_csv_wavs.py` + `finetune_cli.py` as above);
+`metadata_val.csv` stays held out for the evaluation script (see next commit).
 
 ## Server setup for Sooktam-2
 
