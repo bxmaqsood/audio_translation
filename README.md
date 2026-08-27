@@ -1,7 +1,19 @@
-# Urdu Voice-Cloning Dubbing Pipeline
+# Borrowed Voice
 
-Take raw Urdu speech from one speaker and produce new audio (English dubbing) in that same
-cloned voice.
+Forty minutes of a lecturer's Urdu, turned into the same talk delivered in English — same voice,
+same cadence, someone else's language. Not a sound-alike reading a script: the actual speaker's
+voice, cloned and then taught to speak a language it never has.
+
+**[Read the full story →](https://claude.ai/code/artifact/4b1df2c4-6780-446f-9074-ae4f155661e9)**
+— the dead ends, the bugs, and the checkpoint that quietly lied about being the best one in the
+batch. What follows below is the technical reference: setup, exact commands, and every gotcha
+hit along the way, for anyone reproducing or extending this.
+
+**Where it landed:** zero-shot cloning with [Sooktam-2](#current-approach-sooktam-2-zero-shot-cloning)
+gets a correct, recognizable clone straight away; fine-tuning it further on the speaker's own
+audio (see [below](#fine-tuning-sooktam-2-for-more-natural-prosody-optional)) noticeably improves
+how natural the delivery sounds, picked via held-out validation loss rather than the last
+checkpoint on disk — [checkpoint 700 won, the final one scored among the worst](#validation-loss-for-fine-tuning-no-built-in-support-in-f5-ttss-trainer).
 
 ## Current approach: Sooktam-2 zero-shot cloning
 
